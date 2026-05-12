@@ -1,0 +1,5 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(self), microphone=(), geolocation=()
+  Content-Security-Policy: default-src 'self'; connect-src 'self' https://zwcqecszstcmwpknyrqy.supabase.co wss://zwcqecszstcmwpknyrqy.supabase.co https://cdn.jsdelivr.net https://unpkg.com http://localhost:11434 http://127.0.0.1:11434; img-src 'self' data: blob:; script-src 'self' blob: 'wasm-unsafe-eval'; worker-src 'self' blob:; style-src 'self'; font-src 'self'; frame-ancestors 'self' https://hub.hinnoumusic.com; base-uri 'self'; form-action 'self'

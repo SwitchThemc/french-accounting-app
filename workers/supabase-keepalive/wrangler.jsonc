@@ -1,0 +1,13 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "accounts-supabase-keepalive",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-12",
+  "workers_dev": true,
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "SUPABASE_URL": "https://zwcqecszstcmwpknyrqy.supabase.co"
+  }
+}

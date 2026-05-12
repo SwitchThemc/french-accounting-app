@@ -1,0 +1,62 @@
+{
+  "app_id": "compta-solo",
+  "display_name": "Compta Solo",
+  "entry_url": "https://accounts.hinnoumusic.com/dashboard",
+  "dashboard_summary_url": "https://accounts.hinnoumusic.com/api/hub/summary",
+  "notification_push_url": "https://accounts.hinnoumusic.com/api/hub/notifications/push",
+  "hub_notification_target_url": "https://hub.hinnoumusic.com/api/notifications/push",
+  "setup_status": "live",
+  "icon_key": "CS",
+  "icon_url": "https://accounts.hinnoumusic.com/icon.svg?v=20260430",
+  "auth_mode": "standalone_compatible_shared_identity",
+  "auth_handoff": {
+    "method": "redirect_or_token_exchange",
+    "login_url": "https://accounts.hinnoumusic.com/hublaunch",
+    "callback_url": "https://accounts.hinnoumusic.com/hublaunch",
+    "session_bootstrap": "The hub launches /hublaunch with a signed proof, and Compta Solo mints its own Supabase session before restoring the requested workspace tab."
+  },
+  "return_url": "https://hub.hinnoumusic.com",
+  "permissions": ["launch:compta-solo"],
+  "capabilities": ["invoicing", "expenses", "vat", "reports"],
+  "notification_capabilities": ["approval_requested", "mention", "meeting_invite", "receivables", "taxes"],
+  "notification_event_contract": {
+    "delivery": "Compta Solo validates a user event at notification_push_url, normalizes one event per recipient, signs the JSON payload with the configured Cloudflare Pages secret, and forwards it to hub_notification_target_url.",
+    "required_fields": ["app_id", "event_id", "user_email", "type", "title", "body", "href", "created_at"],
+    "recommended_fields": ["priority", "actor", "meta", "icon_url", "display_name"],
+    "stable_event_id": "compta-solo-{event_type}-{entity_or_event_id}-{recipient_user_or_email}",
+    "supported_types": ["approval_requested", "mention", "meeting_invite"],
+    "signed": true,
+    "signature_algorithm": "HMAC-SHA256 over the exact JSON request body",
+    "signature_header": "X-Hub-Signature: sha256=<hmac_sha256_body>",
+    "signature_key_id": "compta-solo-hub-notifications-2026-05-09"
+  },
+  "summary_cards": ["open_invoices", "overdue_invoices", "pending_approvals", "vat_due_eur", "cash_net_eur"],
+  "launch_mode": "external_launch",
+  "deep_links": [
+    { "key": "hublaunch", "path": "/hublaunch" },
+    { "key": "dashboard", "path": "/dashboard" },
+    { "key": "invoices", "path": "/invoices" },
+    { "key": "expenses", "path": "/expenses" },
+    { "key": "contracts", "path": "/contracts" },
+    { "key": "grants", "path": "/grants" },
+    { "key": "bank", "path": "/bank" },
+    { "key": "taxes", "path": "/taxes" },
+    { "key": "reports", "path": "/reports" },
+    { "key": "einvoicing", "path": "/einvoicing" },
+    { "key": "settings", "path": "/settings" }
+  ],
+  "handoff_payload": {
+    "allowed_fields": ["hub_return_url", "launch_target", "permissions", "session_bootstrap", "handoff_payload", "hub_state"]
+  },
+  "ownership": {
+    "repo_path": "/Users/switchthemc/french-accounting-app",
+    "manager_skill": "/Users/switchthemc/.codex/skills/hinnou-hub-manager/SKILL.md"
+  },
+  "standalone_smoke_check": "npm run build",
+  "contract_url": "https://accounts.hinnoumusic.com/hinnou-hub-contract.json",
+  "hub_launch": {
+    "strategy": "session_bootstrap_query",
+    "launch_url": "https://accounts.hinnoumusic.com/hublaunch",
+    "default_deep_link": "/dashboard"
+  }
+}
