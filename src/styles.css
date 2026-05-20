@@ -770,6 +770,15 @@ textarea {
   background: #f3ded8;
 }
 
+.compact-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.compact-list li + li {
+  margin-top: 4px;
+}
+
 .table-wrap {
   max-width: 100%;
   overflow-x: auto;

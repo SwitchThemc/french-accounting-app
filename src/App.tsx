@@ -572,6 +572,8 @@ const labels: Record<Locale, Record<string, string>> = {
     designSaved: "PDF design saved.",
     legalReview: "Legal review",
     legalReviewHelp: "Confirm the draft is complete before approval or signature.",
+    contractIssues: "Contract issues",
+    noContractIssues: "No automatic contract issues found. Human legal review is still required.",
     grantFunding: "Grant funding",
     grantFundingHelp: "Release Manager syncs Switch The MC grant applications here for pricing, expected funding, and follow-up.",
     grantBudgetPipeline: "Grant budget pipeline",
@@ -850,6 +852,8 @@ const labels: Record<Locale, Record<string, string>> = {
     designSaved: "Design PDF enregistré.",
     legalReview: "Relecture juridique",
     legalReviewHelp: "Verifiez que le brouillon est complet avant approbation ou signature.",
+    contractIssues: "Points à corriger",
+    noContractIssues: "Aucun problème automatique détecté. Une relecture juridique humaine reste nécessaire.",
     grantFunding: "Financements",
     grantFundingHelp: "Release Manager synchronise ici les dossiers Switch The MC pour suivre prix, budgets et subventions attendues.",
     grantBudgetPipeline: "Pipeline budgets subventions",
@@ -1961,10 +1965,73 @@ function hasFrenchEnglishLeak(text: string) {
   return frenchEnglishLeakPattern().test(text);
 }
 
+function contractLanguageLeakIssues(language: string, text: string) {
+  const issues: string[] = [];
+  if (language === "fr" && hasFrenchEnglishLeak(text)) {
+    issues.push("The French draft contains English headings or English boilerplate.");
+  }
+  if (language === "en" && /(?:^|\n)\s*(?:\d+\.?\s*)?(Objet|Durée|Prix|Rémunération|Confidentialité|Responsabilité|Résiliation|Droit applicable|Litiges|Signatures|Conditions particulières)\b|Le présent contrat|Signé pour\b|Nom\s*:\s*_{3,}/i.test(text)) {
+    issues.push("The English draft contains French headings or French boilerplate.");
+  }
+  return issues;
+}
+
+function contractCompletenessIssues(contract: ContractDraftPayload, text: string) {
+  const issues: string[] = [];
+  const normalized = text.replace(/\s+/g, " ").trim();
+  const lower = normalized.toLowerCase();
+  [contract.party_a_name, contract.party_b_name].forEach((party) => {
+    const value = party.trim();
+    if (value && !lower.includes(value.toLowerCase())) {
+      issues.push(`Missing party name in draft: ${value}.`);
+    }
+  });
+
+  if (!localTemplateSupportsContractLanguage(contract.language)) {
+    return issues;
+  }
+
+  const requiredConcepts = [
+    ["parties", /parties|party a|party b|prestataire|client|cocontractant/i],
+    ["scope / deliverables", /scope|deliverables|services|purpose|objet|périmètre|perimetre|prestations|livrables/i],
+    ["term / duration", /term|duration|start|end|durée|duree|commence|fin/i],
+    ["payment / compensation", /payment|compensation|fee|revenue share|commission|prix|paiement|rémunération|remuneration|partage/i],
+    ["confidentiality", /confidential|confidentialité|confidentialite/i],
+    ["intellectual property", /intellectual property|ip rights|copyright|propriété intellectuelle|propriete intellectuelle|droits/i],
+    ["termination / cancellation", /termination|terminate|cancellation|résiliation|resiliation|annulation/i],
+    ["liability", /liability|responsabilité|responsabilite/i],
+    ["governing law / disputes", /governing law|dispute|jurisdiction|droit applicable|litige|juridiction/i],
+    ["signature blocks", /signature/i],
+  ] as const;
+
+  requiredConcepts.forEach(([label, pattern]) => {
+    if (!pattern.test(text)) issues.push(`Missing or unclear clause: ${label}.`);
+  });
+
+  if (contract.deliverables.trim().length > 20) {
+    const distinctiveWords = contract.deliverables
+      .toLowerCase()
+      .split(/[^a-z0-9àâäéèêëîïôöùûüçœ]+/i)
+      .filter((word) => word.length >= 6)
+      .slice(0, 4);
+    const matchedWords = distinctiveWords.filter((word) => lower.includes(word.toLowerCase()));
+    if (distinctiveWords.length >= 2 && matchedWords.length === 0) {
+      issues.push("The draft does not appear to include the provided scope/deliverables.");
+    }
+  }
+
+  if (/\[(?:address|email|scope|start date|date|adresse|périmètre|perimetre|à compléter|a completer)[^\]]*\]/i.test(normalized)) {
+    issues.push("The draft still contains bracketed placeholders that should be completed before signature.");
+  }
+
+  return issues;
+}
+
 function contractQualityIssues(contract: ContractDraftPayload, text: string) {
   const issues: string[] = [];
   const factText = [contract.payment_terms, contract.special_terms, contract.deliverables].filter(Boolean).join("\n");
   const percentages = extractPercentageValues(factText);
+  issues.push(...contractCompletenessIssues(contract, text));
 
   if (hasRevenueShareTerms(factText)) {
     if (!/revenue share|profit share|partage de revenus|partage des revenus|rémunération variable|remuneration variable|pourcentage|%/i.test(text)) {
@@ -1978,15 +2045,25 @@ function contractQualityIssues(contract: ContractDraftPayload, text: string) {
         issues.push(`The draft incorrectly converted ${percentage}% into a euro amount.`);
       }
     });
-  }
-
-  if (contract.language === "fr") {
-    if (hasFrenchEnglishLeak(text)) {
-      issues.push("The French draft contains English headings or English boilerplate.");
+    if (/(?:no less than|not below|minimum|floor|au moins|pas moins de|plancher|min(?:imum)?)/i.test(factText) && !/minimum|floor|no less than|not below|au moins|pas moins de|plancher|minimal/i.test(text)) {
+      issues.push("The draft does not clearly state the agreed minimum/floor for the variable compensation.");
+    }
+    if (/(?:cost|employee|lower|reduce|adjust|coût|cout|employé|employe|baisser|réduire|reduire|ajuster)/i.test(factText) && !/cost|employee|adjust|reduce|lower|coût|cout|employé|employe|ajust|rédu|redu|baisse/i.test(text)) {
+      issues.push("The draft does not clearly state the cost/employee adjustment mechanism.");
     }
   }
 
-  return issues;
+  issues.push(...contractLanguageLeakIssues(contract.language, text));
+
+  return Array.from(new Set(issues));
+}
+
+function contractReviewStatus(issues: string[]) {
+  return issues.length ? "needs_revision" : "ready_for_review";
+}
+
+function contractReviewNotes(issues: string[], fallback: string) {
+  return issues.length ? `Automatic contract QA found issues: ${issues.join(" ")}` : fallback;
 }
 
 function buildContractRepairPrompt(contract: ContractDraftPayload, draft: string, issues: string[]) {
@@ -2084,11 +2161,9 @@ function translationQualityIssues(targetLanguage: string, sourceText: string, tr
     }
   });
   if (targetLanguage === "fr") {
-    if (hasFrenchEnglishLeak(translatedText)) {
-      issues.push("The French translation contains English headings or English boilerplate.");
-    }
+    issues.push(...contractLanguageLeakIssues(targetLanguage, translatedText).map((issue) => issue.replace("draft", "translation")));
   }
-  return issues;
+  return Array.from(new Set(issues));
 }
 
 function buildTranslationRepairPrompt(targetLanguage: string, sourceText: string, translatedText: string, issues: string[]) {
@@ -4310,6 +4385,7 @@ function ContractsView({
           ? await generateContractWithOllama(payload, aiSettings)
           : generateContractContent(payload);
       const generatedContent = normalizeContractTextForLanguage(rawGeneratedContent, payload.language);
+      const reviewIssues = contractQualityIssues(payload, generatedContent);
       const { data, error } = await supabase
         .from("contracts")
         .insert({
@@ -4318,8 +4394,8 @@ function ContractsView({
           ...payload,
           end_date: payload.end_date || null,
           generated_content: generatedContent,
-          compliance_status: "needs_review",
-          compliance_notes: "Generated from local open-source template rules. Review before signature.",
+          compliance_status: contractReviewStatus(reviewIssues),
+          compliance_notes: contractReviewNotes(reviewIssues, "Generated from local open-source template rules. Review before signature."),
           legal_provisions: {
             copyright_clause: true,
             data_protection_clause: true,
@@ -4364,6 +4440,12 @@ function ContractsView({
       return;
     }
     if (status === "finalized") {
+      const contract = contracts.find((item) => item.id === id);
+      const reviewIssues = contract ? contractQualityIssues(contractToPayload(contract), contract.generated_content) : [];
+      if (reviewIssues.length) {
+        setMessage(`Fix contract QA issues before finalizing: ${reviewIssues.join(" ")}`);
+        return;
+      }
       const approval = approvals.find((item) => item.kind === "contract" && item.target_id === id);
       if (!approval || approval.status !== "approved") {
         setMessage("Request and approve this contract before finalizing it.");
@@ -4404,8 +4486,11 @@ function ContractsView({
       .from("contracts")
       .update({
         generated_content: normalizeContractTextForLanguage(previewContent, previewContract.language),
-        compliance_status: "needs_review",
-        compliance_notes: "Edited manually after generation. Review before signature.",
+        compliance_status: contractReviewStatus(contractQualityIssues(contractToPayload(previewContract), normalizeContractTextForLanguage(previewContent, previewContract.language))),
+        compliance_notes: contractReviewNotes(
+          contractQualityIssues(contractToPayload(previewContract), normalizeContractTextForLanguage(previewContent, previewContract.language)),
+          "Edited manually after generation. Review before signature.",
+        ),
       })
       .eq("id", previewContract.id);
     if (error) {
@@ -4414,7 +4499,13 @@ function ContractsView({
     }
     const normalizedPreviewContent = normalizeContractTextForLanguage(previewContent, previewContract.language);
     setPreviewContent(normalizedPreviewContent);
-    setPreviewContract({ ...previewContract, generated_content: normalizedPreviewContent, compliance_status: "needs_review" });
+    const previewIssues = contractQualityIssues(contractToPayload(previewContract), normalizedPreviewContent);
+    setPreviewContract({
+      ...previewContract,
+      generated_content: normalizedPreviewContent,
+      compliance_status: contractReviewStatus(previewIssues),
+      compliance_notes: contractReviewNotes(previewIssues, "Edited manually after generation. Review before signature."),
+    });
     setMessage(t.draftSaved);
     void pushMentionNotifications({
       event_type: "mention",
@@ -4585,6 +4676,11 @@ function ContractsView({
       setMessage(t.approvalRequestRestricted);
       return;
     }
+    const reviewIssues = contractQualityIssues(contractToPayload(contract), contract.generated_content);
+    if (reviewIssues.length) {
+      setMessage(`Fix contract QA issues before requesting approval: ${reviewIssues.join(" ")}`);
+      return;
+    }
     const existing = approvals.find(
       (approval) => approval.kind === "contract" && approval.target_id === contract.id && approval.status === "pending",
     );
@@ -4685,6 +4781,7 @@ function ContractsView({
           ? await generateContractWithOllama(payload, aiSettings)
           : generateContractContent(payload);
       const generatedContent = normalizeContractTextForLanguage(rawGeneratedContent, payload.language);
+      const reviewIssues = contractQualityIssues(payload, generatedContent);
       const { data, error } = await supabase
         .from("contracts")
         .insert({
@@ -4692,8 +4789,8 @@ function ContractsView({
           ...payload,
           end_date: payload.end_date || null,
           generated_content: generatedContent,
-          compliance_status: "needs_review",
-          compliance_notes: "Generated from guided AI chat. Review before signature.",
+          compliance_status: contractReviewStatus(reviewIssues),
+          compliance_notes: contractReviewNotes(reviewIssues, "Generated from guided AI chat. Review before signature."),
           legal_provisions: {
             copyright_clause: true,
             data_protection_clause: true,
@@ -4735,6 +4832,10 @@ function ContractsView({
       setGenerating(false);
     }
   }
+
+  const previewReviewIssues = previewContract
+    ? contractQualityIssues(contractToPayload(previewContract), previewContent || previewContract.generated_content)
+    : [];
 
   return (
     <div className="split-view">
@@ -4976,7 +5077,17 @@ function ContractsView({
             <div className="scan-review">
               <strong>{t.legalReview}</strong>
               <span>{t.legalReviewHelp}</span>
-              <span>{previewContract.compliance_status}</span>
+              <span>{previewReviewIssues.length ? "needs_revision" : previewContract.compliance_status}</span>
+            </div>
+            <div className={previewReviewIssues.length ? "notice error" : "notice"}>
+              <strong>{previewReviewIssues.length ? t.contractIssues : t.noContractIssues}</strong>
+              {previewReviewIssues.length ? (
+                <ul className="compact-list">
+                  {previewReviewIssues.map((issue) => (
+                    <li key={issue}>{issue}</li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
             <div className="contract-design-tools">
               <div className="span-form">
