@@ -560,6 +560,7 @@ const labels: Record<Locale, Record<string, string>> = {
     bilingualPdf: "Bilingual PDF",
     secondLanguageDraft: "Second-language draft",
     useOllamaForLanguage: "Use Ollama to generate this language.",
+    localTemplateLanguageHelp: "Local templates support English and French only.",
     originalLanguage: "Original language",
     contractDesign: "PDF design",
     contractDesignHelp: "Customize the exported PDF title, accent color, font and logo.",
@@ -837,6 +838,7 @@ const labels: Record<Locale, Record<string, string>> = {
     bilingualPdf: "PDF bilingue",
     secondLanguageDraft: "Brouillon dans la deuxième langue",
     useOllamaForLanguage: "Utilisez Ollama pour générer cette langue.",
+    localTemplateLanguageHelp: "Les modèles locaux prennent uniquement en charge l'anglais et le français.",
     originalLanguage: "Langue originale",
     contractDesign: "Design PDF",
     contractDesignHelp: "Personnalisez le titre exporté, la couleur, la police et le logo.",
@@ -1534,6 +1536,33 @@ function contractLanguageName(language: string) {
   return contractLanguageLabels[language] ?? language.toUpperCase();
 }
 
+function contractPdfLabels(language: string) {
+  if (language === "fr") {
+    return {
+      documentTitle: "Contrat",
+      type: "Type",
+      status: "Statut",
+      jurisdiction: "Juridiction",
+      language: "Langue",
+      compensation: "Rémunération",
+      parties: "Parties",
+      draft: "Brouillon généré",
+      revenueShare: "Partage de revenus / rémunération variable",
+    };
+  }
+  return {
+    documentTitle: "Contract",
+    type: "Type",
+    status: "Status",
+    jurisdiction: "Jurisdiction",
+    language: "Language",
+    compensation: "Compensation",
+    parties: "Parties",
+    draft: "Generated draft",
+    revenueShare: "Revenue share / variable compensation",
+  };
+}
+
 function contractTypeDraftingFocus(contractType: string) {
   const focus: Record<string, string> = {
     artist_booking: "artist availability, performance obligations, set length, technical rider, cancellation, promotion, recording rights, and settlement.",
@@ -1741,7 +1770,10 @@ function hasRevenueShareTerms(text: string) {
 }
 
 function buildCompensationText(contract: ContractDraftPayload) {
-  const terms = contract.payment_terms.trim();
+  const compensationFacts = [contract.payment_terms, contract.special_terms, contract.deliverables]
+    .filter((value) => hasRevenueShareTerms(value || ""))
+    .join("\n");
+  const terms = (compensationFacts || contract.payment_terms).trim();
   if (hasRevenueShareTerms(terms)) {
     return {
       en: `Compensation is governed by the following revenue-share or variable-payment terms and must not be treated as a fixed euro fee: ${terms}. If the terms mention percentages, those percentages apply to the defined revenue base, subject to the floors, reductions, costs, employee costs, and adjustment rules stated by the parties.`,
@@ -1752,6 +1784,10 @@ function buildCompensationText(contract: ContractDraftPayload) {
     en: `The total fee is ${contract.fee_amount.toFixed(2)} ${contract.fee_currency}. Payment terms: ${terms || "payment due within 30 days of valid invoice receipt"}. Late payment may trigger statutory late-payment penalties and recovery costs where applicable.`,
     fr: `Le prix total est de ${contract.fee_amount.toFixed(2)} ${contract.fee_currency}. Conditions de paiement : ${terms || "paiement à 30 jours après réception d'une facture conforme"}. Les retards de paiement peuvent entraîner les pénalités et indemnités légales applicables.`,
   };
+}
+
+function localTemplateSupportsContractLanguage(language: string) {
+  return language === "en" || language === "fr";
 }
 
 function buildContractPrompt(contract: ContractDraftPayload) {
@@ -2293,39 +2329,27 @@ async function downloadContractPdf(contract: Contract, company: Company) {
   const branding = getContractBranding(contract);
   const contractContent = contractTextForPdf(normalizeContractTextForLanguage(contract.generated_content, contract.language));
   const title = branding.title || contract.title;
-  let y = pdfDocumentHeader(pdf, "Contract", title, company, branding);
+  const pdfLabels = contractPdfLabels(contract.language);
+  const compensationSummary = hasRevenueShareTerms([contract.payment_terms, contract.special_terms, contract.deliverables].filter(Boolean).join("\n"))
+    ? pdfLabels.revenueShare
+    : `${eur(contract.fee_amount)} ${contract.fee_currency}`;
+  let y = pdfDocumentHeader(pdf, pdfLabels.documentTitle, title, company, branding);
 
   y = pdfKeyValueRows(
     pdf,
     [
-      ["Type", contractTypeLabels[contract.contract_type] ?? contract.contract_type],
-      ["Status", contract.status],
-      ["Jurisdiction", contract.country],
-      ["Language", contractLanguageName(contract.language)],
-      ["Fee", `${eur(contract.fee_amount)} ${contract.fee_currency}`],
-      ["Parties", `${contract.party_a_name} / ${contract.party_b_name}`],
+      [pdfLabels.type, contractTypeLabelForLanguage(contract.contract_type, contract.language)],
+      [pdfLabels.status, contract.status],
+      [pdfLabels.jurisdiction, contract.country],
+      [pdfLabels.language, contractLanguageName(contract.language)],
+      [pdfLabels.compensation, compensationSummary],
+      [pdfLabels.parties, `${contract.party_a_name} / ${contract.party_b_name}`],
     ],
     y,
   );
 
   pdf.setFont(branding.fontFamily || "helvetica", "normal");
-  if (contract.language !== "en") {
-    y = pdfSectionTitle(pdf, "Bilingual draft", y);
-    const englishDraft = contractTextForPdf(generateContractContent(contractToPayload(contract, "en")));
-    y = pdfTwoColumnText(
-      pdf,
-      "English",
-      contractLanguageName(contract.language),
-      englishDraft,
-      contractContent,
-      y,
-      branding,
-    );
-    savePdf(pdf, `${title}-${today}`);
-    return;
-  }
-
-  y = pdfSectionTitle(pdf, "Generated draft", y);
+  y = pdfSectionTitle(pdf, pdfLabels.draft, y);
   pdf.setFont(branding.fontFamily || "helvetica", "normal");
   pdf.setFontSize(9);
   const paragraphs = contractContent.split(/\n{2,}/).map((paragraph) => paragraph.trim()).filter(Boolean);
@@ -2416,7 +2440,7 @@ function pdfTwoColumnText(
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
   const leftX = 6;
-  const gutter = 4;
+  const gutter = 3;
   const columnWidth = (pageWidth - leftX * 2 - gutter) / 2;
   const rightX = leftX + columnWidth + gutter;
   const lineHeight = 4.15;
@@ -2445,8 +2469,8 @@ function pdfTwoColumnText(
   for (let index = 0; index < maxBlocks; index += 1) {
     const leftBlock = leftBlocks[index] || "";
     const rightBlock = rightBlocks[index] || "";
-    const leftLines = pdf.splitTextToSize(leftBlock || " ", columnWidth - 1) as string[];
-    const rightLines = pdf.splitTextToSize(rightBlock || " ", columnWidth - 1) as string[];
+    const leftLines = pdf.splitTextToSize(leftBlock || " ", columnWidth) as string[];
+    const rightLines = pdf.splitTextToSize(rightBlock || " ", columnWidth) as string[];
     const blockLines = Math.max(leftLines.length, rightLines.length, 1);
     const blockHeight = blockLines * lineHeight + 3;
 
@@ -3440,9 +3464,13 @@ function InvoicesView({
     setScanBusy(true);
     try {
       const { createWorker } = await import("tesseract.js");
-      const worker = await createWorker("eng");
-      const result = await worker.recognize(invoiceUpload);
-      await worker.terminate();
+      const worker = await createWorker("eng+fra");
+      let result;
+      try {
+        result = await worker.recognize(invoiceUpload);
+      } finally {
+        await worker.terminate();
+      }
       const parsed = parseInvoiceScan(result.data.text);
       const matchedVatCode = saleVatCodes.find((code) => parsed.vatRate !== null && Math.abs(Number(code.rate) - parsed.vatRate) < 0.01);
 
@@ -3882,8 +3910,12 @@ function ExpensesView({
     try {
       const { createWorker } = await import("tesseract.js");
       const worker = await createWorker("eng+fra");
-      const result = await worker.recognize(receiptUpload);
-      await worker.terminate();
+      let result;
+      try {
+        result = await worker.recognize(receiptUpload);
+      } finally {
+        await worker.terminate();
+      }
       const parsed = parseInvoiceScan(result.data.text);
       const matchedVatCode = purchaseVatCodes.find((code) => parsed.vatRate !== null && Math.abs(Number(code.rate) - parsed.vatRate) < 0.01);
       const suggestedCategory = /restaurant|cafe|brasserie|food|repas/i.test(result.data.text)
@@ -4270,6 +4302,9 @@ function ContractsView({
     const selectedContactId = String(form.get("contact_id") || "");
 
     try {
+      if (aiSettings.provider !== "ollama" && !localTemplateSupportsContractLanguage(payload.language)) {
+        throw new Error(t.useOllamaForLanguage);
+      }
       const rawGeneratedContent =
         aiSettings.provider === "ollama"
           ? await generateContractWithOllama(payload, aiSettings)
@@ -4642,6 +4677,9 @@ function ContractsView({
     setGenerating(true);
     try {
       const payload = buildPayloadFromChat(company, chatDraft.answers);
+      if (aiSettings.provider !== "ollama" && !localTemplateSupportsContractLanguage(payload.language)) {
+        throw new Error(t.useOllamaForLanguage);
+      }
       const rawGeneratedContent =
         aiSettings.provider === "ollama"
           ? await generateContractWithOllama(payload, aiSettings)
@@ -4781,12 +4819,15 @@ function ContractsView({
           <label>
             {t.language}
             <select name="language" defaultValue="en">
-              {Object.entries(contractLanguageLabels).map(([value, label]) => (
-                <option key={value} value={value}>
-                  {label}
-                </option>
-              ))}
+              {Object.entries(contractLanguageLabels)
+                .filter(([value]) => aiSettings.provider === "ollama" || localTemplateSupportsContractLanguage(value))
+                .map(([value, label]) => (
+                  <option key={value} value={value}>
+                    {label}
+                  </option>
+                ))}
             </select>
+            {aiSettings.provider !== "ollama" && <small>{t.localTemplateLanguageHelp}</small>}
           </label>
           <label>
             {t.feeAmount}

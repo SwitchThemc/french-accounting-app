@@ -71,7 +71,9 @@ function run() {
 
   addCheck("PDF layout helpers present", app.includes("const pdfLayout") && app.includes("contractTextForPdf") && app.includes("pdfContentWidth"), "PDF exports use shared margins, width, and text normalization.");
   addCheck("Contract PDF columns are block aligned", app.includes("contractBlocksForPdf") && app.includes("const maxBlocks = Math.max"), "Bilingual contract PDFs align translated blocks instead of raw wrapped line indexes.");
+  addCheck("Single-language contract PDF stays single-language", app.includes("contractPdfLabels") && !app.includes("const englishDraft = contractTextForPdf(generateContractContent(contractToPayload(contract, \"en\")))"), "Single contract export does not silently inject an English column into French PDFs.");
   addCheck("Contract chat preserves revenue-share facts", app.includes("inferContractFactsFromText") && app.includes("Preserve percentage values exactly"), "Contract interview extracts percentage, floor, and variable compensation facts.");
+  addCheck("Contract local template language guard", app.includes("localTemplateSupportsContractLanguage") && app.includes("localTemplateLanguageHelp"), "Local template generation cannot create mislabeled non-English/non-French drafts.");
   addCheck("Contract split editor is responsive", includes("src/styles.css", "contract-editor-split") && includes("src/styles.css", "grid-template-columns: repeat(2, minmax(0, 1fr))"), "Original and translated contract drafts render as a split editor on wide screens.");
   addCheck("Contract language options avoid unsupported PDF scripts", !app.includes('ar: "Arabic"') && !app.includes('return "ar"'), "Language picker avoids RTL scripts until a Unicode PDF font pipeline exists.");
   addCheck("French contract type labels are localized", app.includes("contractTypeLabelForLanguage") && app.includes("contrat de prestation de services"), "French drafts do not insert English contract type labels in the parties clause.");
