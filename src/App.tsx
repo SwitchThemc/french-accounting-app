@@ -2166,6 +2166,17 @@ function translationQualityIssues(targetLanguage: string, sourceText: string, tr
   return Array.from(new Set(issues));
 }
 
+function pdfColumnLanguageIssues(language: string, columnText: string, columnLabel: string) {
+  return contractLanguageLeakIssues(language, columnText).map((issue) => `${columnLabel}: ${issue}`);
+}
+
+function assertPdfColumnLanguage(language: string, columnText: string, columnLabel: string) {
+  const issues = pdfColumnLanguageIssues(language, columnText, columnLabel);
+  if (issues.length) {
+    throw new Error(`PDF export blocked because a column has the wrong language: ${issues.join(" ")}`);
+  }
+}
+
 function buildTranslationRepairPrompt(targetLanguage: string, sourceText: string, translatedText: string, issues: string[]) {
   const targetLanguageName = contractLanguageName(targetLanguage);
   return `You are repairing a legal contract translation that failed quality checks.
@@ -2444,12 +2455,15 @@ async function downloadBilingualContractPdf(
   company: Company,
   targetLanguage: string,
   targetContent: string,
+  sourceContentOverride?: string,
 ) {
   const { jsPDF } = await import("jspdf");
   const pdf = new jsPDF();
   const branding = getContractBranding(contract);
-  const sourceContent = contractTextForPdf(normalizeContractTextForLanguage(contract.generated_content, contract.language));
+  const sourceContent = contractTextForPdf(normalizeContractTextForLanguage(sourceContentOverride ?? contract.generated_content, contract.language));
   const normalizedTargetContent = contractTextForPdf(normalizeContractTextForLanguage(targetContent, targetLanguage));
+  assertPdfColumnLanguage(contract.language, sourceContent, contractLanguageName(contract.language));
+  assertPdfColumnLanguage(targetLanguage, normalizedTargetContent, contractLanguageName(targetLanguage));
   const title = branding.title || contract.title;
   let y = pdfDocumentHeader(pdf, "Bilingual contract", title, company, branding);
 
@@ -4670,6 +4684,16 @@ function ContractsView({
     onChanged();
   }
 
+  async function exportPreviewBilingualPdf() {
+    if (!previewContract || !translationContent.trim()) return;
+    setMessage("");
+    try {
+      await downloadBilingualContractPdf(previewContract, company, translationLanguage, translationContent, previewContent || previewContract.generated_content);
+    } catch (error) {
+      setMessage(getMessage(error));
+    }
+  }
+
   async function requestContractApproval(contract: Contract) {
     setMessage("");
     if (!canRequestApproval(currentAccess)) {
@@ -5144,7 +5168,7 @@ function ContractsView({
               <button
                 className="primary"
                 disabled={!translationContent.trim()}
-                onClick={() => void downloadBilingualContractPdf(previewContract, company, translationLanguage, translationContent)}
+                onClick={() => void exportPreviewBilingualPdf()}
               >
                 <FileDown size={17} />
                 {t.bilingualPdf}

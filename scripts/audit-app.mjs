@@ -71,6 +71,7 @@ function run() {
 
   addCheck("PDF layout helpers present", app.includes("const pdfLayout") && app.includes("contractTextForPdf") && app.includes("pdfContentWidth"), "PDF exports use shared margins, width, and text normalization.");
   addCheck("Contract PDF columns are block aligned", app.includes("contractBlocksForPdf") && app.includes("const maxBlocks = Math.max"), "Bilingual contract PDFs align translated blocks instead of raw wrapped line indexes.");
+  addCheck("Bilingual PDF columns enforce language", app.includes("assertPdfColumnLanguage") && app.includes("exportPreviewBilingualPdf") && app.includes("PDF export blocked because a column has the wrong language"), "Bilingual PDF export validates the exact rendered source and translated columns before saving.");
   addCheck("Single-language contract PDF stays single-language", app.includes("contractPdfLabels") && !app.includes("const englishDraft = contractTextForPdf(generateContractContent(contractToPayload(contract, \"en\")))"), "Single contract export does not silently inject an English column into French PDFs.");
   addCheck("Contract chat preserves revenue-share facts", app.includes("inferContractFactsFromText") && app.includes("Preserve percentage values exactly"), "Contract interview extracts percentage, floor, and variable compensation facts.");
   addCheck("Contract local template language guard", app.includes("localTemplateSupportsContractLanguage") && app.includes("localTemplateLanguageHelp"), "Local template generation cannot create mislabeled non-English/non-French drafts.");
