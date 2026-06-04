@@ -47,6 +47,10 @@ type Company = {
   id: string;
   name: string;
   legal_form: string | null;
+  registered_address: string | null;
+  rcs_number: string | null;
+  ape_code: string | null;
+  activity_description: string | null;
   country_code: string;
   base_currency: string;
   fiscal_regime: string;
@@ -297,8 +301,29 @@ type ScanReview = {
   reference: string;
   email: string;
   siret: string;
+  name?: string;
+  legalForm?: string;
+  registeredAddress?: string;
+  rcsNumber?: string;
+  apeCode?: string;
+  activityDescription?: string;
   confidenceNotes: string[];
   rawText?: string;
+};
+
+type CompanyDraft = {
+  name: string;
+  legal_form: string;
+  registered_address: string;
+  rcs_number: string;
+  ape_code: string;
+  activity_description: string;
+  fiscal_regime: string;
+  vat_liability_mode: string;
+  invoice_prefix: string;
+  base_currency: string;
+  siret: string;
+  vat_number: string;
 };
 
 type CompanyInvite = {
@@ -590,6 +615,17 @@ const labels: Record<Locale, Record<string, string>> = {
     save: "Save",
     companyInformation: "Company information",
     companyInformationHelp: "Edit the legal and accounting defaults used across invoices, exports and contracts.",
+    kbisUpload: "Kbis upload",
+    kbisUploadHelp: "Upload a Kbis PDF, photo or screenshot to prefill verified company identity fields.",
+    scanKbis: "Parse Kbis",
+    kbisParsed: "Kbis parsed. Review the detected fields before saving.",
+    kbisPdfParsed: "Kbis PDF text parsed. Review the detected fields before saving.",
+    kbisImageParsed: "Kbis image OCR complete. Review the detected fields before saving.",
+    kbisUnsupported: "Upload a Kbis PDF or image file.",
+    registeredAddress: "Registered address",
+    rcsNumber: "RCS number",
+    apeCode: "APE / NAF code",
+    activityDescription: "Activity description",
     legalForm: "Legal form",
     baseCurrency: "Base currency",
     saveCompany: "Save company",
@@ -873,6 +909,17 @@ const labels: Record<Locale, Record<string, string>> = {
     save: "Enregistrer",
     companyInformation: "Informations entreprise",
     companyInformationHelp: "Modifier les informations légales et comptables utilisées partout.",
+    kbisUpload: "Import Kbis",
+    kbisUploadHelp: "Importez un Kbis PDF, une photo ou une capture pour préremplir l'identité juridique vérifiée.",
+    scanKbis: "Analyser le Kbis",
+    kbisParsed: "Kbis analysé. Vérifiez les champs détectés avant d'enregistrer.",
+    kbisPdfParsed: "Texte du PDF Kbis analysé. Vérifiez les champs détectés avant d'enregistrer.",
+    kbisImageParsed: "OCR de l'image Kbis terminé. Vérifiez les champs détectés avant d'enregistrer.",
+    kbisUnsupported: "Importez un fichier Kbis PDF ou image.",
+    registeredAddress: "Adresse du siège",
+    rcsNumber: "Numéro RCS",
+    apeCode: "Code APE / NAF",
+    activityDescription: "Activité",
     legalForm: "Forme juridique",
     baseCurrency: "Devise",
     saveCompany: "Enregistrer",
@@ -1311,9 +1358,129 @@ function parseInvoiceScan(text: string) {
   };
 }
 
+function deriveFrenchVatNumberFromSiret(siret: string) {
+  const siren = siret.replace(/\D/g, "").slice(0, 9);
+  if (!/^\d{9}$/.test(siren)) return "";
+  const key = (12 + 3 * (Number(siren) % 97)) % 97;
+  return `FR${String(key).padStart(2, "0")}${siren}`;
+}
+
+function cleanKbisValue(value: string) {
+  return value
+    .replace(/^\s*[:\-–]\s*/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function valueAfterKbisLabel(lines: string[], labelPattern: RegExp, maxNextLines = 1) {
+  const index = lines.findIndex((line) => labelPattern.test(line));
+  if (index === -1) return "";
+  const sameLine = lines[index].replace(labelPattern, "");
+  const parts = [sameLine, ...lines.slice(index + 1, index + 1 + maxNextLines)]
+    .map(cleanKbisValue)
+    .filter((line) => line && !/^(greffe|rcs|siret|siren|ape|naf|forme|capital|activit|date|dirigeant|président|gerant|gérant)\b/i.test(line));
+  return parts.join(", ");
+}
+
+function parseKbisScan(text: string) {
+  const normalized = text.normalize("NFC");
+  const lines = normalized
+    .split(/\r?\n/)
+    .map((line) => cleanKbisValue(line))
+    .filter(Boolean);
+  const siret = normalized.match(/\b(?:siret|n[°o]\s*siret)?\s*[:\-]?\s*(\d{3}\s?\d{3}\s?\d{3}\s?\d{5})\b/i)?.[1]?.replace(/\D/g, "") ?? "";
+  const siren = normalized.match(/\b(?:siren|rcs\s+[A-ZÀ-Ÿ -]+)?\s*[:\-]?\s*(\d{3}\s?\d{3}\s?\d{3})\b/i)?.[1]?.replace(/\D/g, "") ?? "";
+  const legalFormMatch = normalized.match(/\b(SASU|SAS|SARL|EURL|SA|SCI|SNC|EI|EIRL|micro-entreprise|auto-entrepreneur)\b/i);
+  const rcsMatch = normalized.match(/\bRCS\s+([A-ZÀ-Ÿ][A-ZÀ-Ÿ '\-]+)\s+(\d{3}\s?\d{3}\s?\d{3})\b/i);
+  const apeMatch = normalized.match(/\b(?:code\s*)?(?:APE|NAF)\s*[:\-]?\s*(\d{2}\.?\d{2}[A-Z])\b/i);
+  const name =
+    valueAfterKbisLabel(lines, /^(?:dénomination|denomination|raison sociale|nom commercial)\b\s*:?/i) ||
+    lines.find((line) => !/extrait|kbis|registre|commerce|greffe|rcs|siret|siren|forme|capital|adresse|siège|siege|ape|naf|activité|activite/i.test(line)) ||
+    "";
+  const registeredAddress =
+    valueAfterKbisLabel(lines, /^(?:adresse du siège|adresse du siege|siège social|siege social|adresse de l'établissement|adresse)\b\s*:?/i, 3);
+  const activityDescription =
+    valueAfterKbisLabel(lines, /^(?:activité principale|activite principale|activité|activite|objet social)\b\s*:?/i, 3);
+  const normalizedSiret = siret || (siren ? `${siren}` : "");
+
+  return {
+    name,
+    legalForm: legalFormMatch?.[1]?.toUpperCase() ?? "",
+    registeredAddress,
+    rcsNumber: rcsMatch ? `RCS ${cleanKbisValue(rcsMatch[1])} ${rcsMatch[2].replace(/\D/g, "")}` : "",
+    apeCode: apeMatch?.[1]?.replace(".", "").toUpperCase() ?? "",
+    activityDescription,
+    siret: normalizedSiret.length === 14 ? normalizedSiret : "",
+    vatNumber: normalizedSiret.length >= 9 ? deriveFrenchVatNumberFromSiret(normalizedSiret) : "",
+    confidenceNotes: [
+      name ? "name" : "",
+      legalFormMatch ? "legal form" : "",
+      registeredAddress ? "address" : "",
+      normalizedSiret.length === 14 ? "siret" : siren ? "siren" : "",
+      rcsMatch ? "rcs" : "",
+      apeMatch ? "ape" : "",
+      activityDescription ? "activity" : "",
+    ].filter(Boolean),
+    rawText: normalized,
+  };
+}
+
+async function extractTextFromPdf(file: File) {
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/legacy/build/pdf.worker.mjs", import.meta.url).toString();
+  const document = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+  const pageTexts: string[] = [];
+  for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
+    const page = await document.getPage(pageNumber);
+    const content = await page.getTextContent();
+    pageTexts.push(content.items.map((item) => ("str" in item ? item.str : "")).join("\n"));
+  }
+  return pageTexts.join("\n");
+}
+
+async function extractTextFromImage(file: File) {
+  const { createWorker } = await import("tesseract.js");
+  const worker = await createWorker("eng+fra");
+  try {
+    const result = await worker.recognize(file);
+    return result.data.text;
+  } finally {
+    await worker.terminate();
+  }
+}
+
+function companyToDraft(company: Company): CompanyDraft {
+  return {
+    name: company.name,
+    legal_form: company.legal_form ?? "",
+    registered_address: company.registered_address ?? "",
+    rcs_number: company.rcs_number ?? "",
+    ape_code: company.ape_code ?? "",
+    activity_description: company.activity_description ?? "",
+    fiscal_regime: company.fiscal_regime,
+    vat_liability_mode: company.vat_liability_mode,
+    invoice_prefix: company.invoice_prefix,
+    base_currency: company.base_currency ?? "EUR",
+    siret: company.siret ?? "",
+    vat_number: company.vat_number ?? "",
+  };
+}
+
+function formatCompanyIssuerLines(company: Company) {
+  return [
+    company.name,
+    company.legal_form,
+    company.registered_address,
+    company.siret ? `SIRET ${company.siret}` : "",
+    company.rcs_number,
+    company.ape_code ? `APE ${company.ape_code}` : "",
+    company.vat_number ? `TVA ${company.vat_number}` : "",
+  ].filter(Boolean).join("\n");
+}
+
 function invoiceLegalMention(company: Company) {
   if (company.vat_liability_mode === "exempt") return "TVA non applicable, art. 293 B du CGI";
-  return "TVA exigible selon les regles applicables a la date de facturation.";
+  return "TVA exigible selon les règles applicables à la date de facturation.";
 }
 
 async function downloadInvoicePdf(invoice: Invoice, contact: Contact | undefined, lines: InvoiceLine[], company: Company) {
@@ -1332,7 +1499,7 @@ async function downloadInvoicePdf(invoice: Invoice, contact: Contact | undefined
   pdf.text("Client", clientX, y);
   y += 7;
   pdf.setFont("helvetica", "normal");
-  const issuerBottom = pdfText(pdf, company.name, left, y, partyColumnWidth);
+  const issuerBottom = pdfText(pdf, formatCompanyIssuerLines(company), left, y, partyColumnWidth);
   const clientBottom = pdfText(pdf, [contact?.display_name ?? "Client", contact?.email ?? ""].filter(Boolean).join("\n"), clientX, y, partyColumnWidth);
   y = Math.max(issuerBottom, clientBottom);
   y += 8;
@@ -2101,7 +2268,7 @@ function buildPayloadFromChat(company: Company, answers: Partial<ContractDraftPa
     country: answers.country || "France",
     language: answers.language || "en",
     party_a_name: answers.party_a_name || company.name,
-    party_a_address: answers.party_a_address || "",
+    party_a_address: answers.party_a_address || company.registered_address || "",
     party_a_email: answers.party_a_email || "",
     party_b_name: counterparty,
     party_b_address: answers.party_b_address || "",
@@ -4390,7 +4557,7 @@ function ContractsView({
       country: String(form.get("country") || "France"),
       language: String(form.get("language") || "en"),
       party_a_name: String(form.get("party_a_name") || company.name),
-      party_a_address: String(form.get("party_a_address") || ""),
+      party_a_address: String(form.get("party_a_address") || company.registered_address || ""),
       party_a_email: String(form.get("party_a_email") || ""),
       party_b_name: String(form.get("party_b_name")),
       party_b_address: String(form.get("party_b_address") || ""),
@@ -4991,7 +5158,7 @@ function ContractsView({
           </label>
           <label>
             {t.yourAddress}
-            <input name="party_a_address" placeholder="Address" />
+            <input name="party_a_address" defaultValue={company.registered_address ?? ""} placeholder="Address" />
           </label>
           <label>
             {t.yourEmail}
@@ -5430,7 +5597,75 @@ function SettingsView({
   onChanged: () => void;
 }) {
   const [message, setMessage] = useState("");
+  const [kbisFile, setKbisFile] = useState<File | null>(null);
+  const [kbisBusy, setKbisBusy] = useState(false);
+  const [kbisReview, setKbisReview] = useState<ScanReview | null>(null);
+  const [companyDraft, setCompanyDraft] = useState<CompanyDraft>(() => companyToDraft(company));
   const t = labels[locale];
+
+  useEffect(() => {
+    setCompanyDraft(companyToDraft(company));
+    setKbisReview(null);
+  }, [company]);
+
+  function updateCompanyDraft(field: keyof CompanyDraft, value: string) {
+    setCompanyDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  async function scanKbisUpload() {
+    setMessage("");
+    if (!kbisFile) {
+      setMessage(t.kbisUnsupported);
+      return;
+    }
+    setKbisBusy(true);
+    try {
+      let rawText = "";
+      let parsedFrom = "";
+      if (kbisFile.type === "application/pdf" || kbisFile.name.toLowerCase().endsWith(".pdf")) {
+        rawText = await extractTextFromPdf(kbisFile);
+        parsedFrom = t.kbisPdfParsed;
+      } else if (kbisFile.type.startsWith("image/")) {
+        rawText = await extractTextFromImage(kbisFile);
+        parsedFrom = t.kbisImageParsed;
+      } else {
+        setMessage(t.kbisUnsupported);
+        return;
+      }
+
+      const parsed = parseKbisScan(rawText);
+      setCompanyDraft((current) => ({
+        ...current,
+        name: parsed.name || current.name,
+        legal_form: parsed.legalForm || current.legal_form,
+        registered_address: parsed.registeredAddress || current.registered_address,
+        rcs_number: parsed.rcsNumber || current.rcs_number,
+        ape_code: parsed.apeCode || current.ape_code,
+        activity_description: parsed.activityDescription || current.activity_description,
+        siret: parsed.siret || current.siret,
+        vat_number: parsed.vatNumber || current.vat_number,
+      }));
+      setKbisReview({
+        documentType: "kbis",
+        reference: parsed.rcsNumber,
+        email: "",
+        siret: parsed.siret,
+        name: parsed.name,
+        legalForm: parsed.legalForm,
+        registeredAddress: parsed.registeredAddress,
+        rcsNumber: parsed.rcsNumber,
+        apeCode: parsed.apeCode,
+        activityDescription: parsed.activityDescription,
+        confidenceNotes: parsed.confidenceNotes,
+        rawText: parsed.rawText,
+      });
+      setMessage(parsed.confidenceNotes.length ? parsedFrom : `${parsedFrom} ${t.kbisParsed}`);
+    } catch (error) {
+      setMessage(getMessage(error));
+    } finally {
+      setKbisBusy(false);
+    }
+  }
 
   async function updateCompany(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -5445,6 +5680,10 @@ function SettingsView({
       .update({
         name: String(form.get("name")),
         legal_form: String(form.get("legal_form") || "") || null,
+        registered_address: String(form.get("registered_address") || "") || null,
+        rcs_number: String(form.get("rcs_number") || "") || null,
+        ape_code: String(form.get("ape_code") || "") || null,
+        activity_description: String(form.get("activity_description") || "") || null,
         fiscal_regime: String(form.get("fiscal_regime")),
         vat_liability_mode: String(form.get("vat_liability_mode")),
         invoice_prefix: String(form.get("invoice_prefix")),
@@ -5675,18 +5914,67 @@ function SettingsView({
           <span>{t.allowedRoles}</span>
           {!currentAccess.canManageCompany && <span>{t.manageCompanyRestricted}</span>}
         </div>
+        <div className="scan-card">
+          <Upload size={22} />
+          <div>
+            <strong>{t.kbisUpload}</strong>
+            <span>{t.kbisUploadHelp}</span>
+            {kbisFile && <span>{kbisFile.name}</span>}
+          </div>
+          <label className="ghost file-button">
+            <input
+              type="file"
+              accept="application/pdf,image/*"
+              disabled={!currentAccess.canManageCompany || kbisBusy}
+              onChange={(event) => setKbisFile(event.currentTarget.files?.[0] ?? null)}
+            />
+            {t.upload}
+          </label>
+          <button type="button" className="ghost" disabled={!currentAccess.canManageCompany || !kbisFile || kbisBusy} onClick={() => void scanKbisUpload()}>
+            {kbisBusy ? t.scanning : t.scanKbis}
+          </button>
+        </div>
+        {kbisReview && (
+          <div className="scan-review">
+            <strong>{t.detectedDocument}: Kbis</strong>
+            {kbisReview.name && <span>{t.companyName}: {kbisReview.name}</span>}
+            {kbisReview.legalForm && <span>{t.legalForm}: {kbisReview.legalForm}</span>}
+            {kbisReview.siret && <span>SIRET: {kbisReview.siret}</span>}
+            {kbisReview.rcsNumber && <span>{t.rcsNumber}: {kbisReview.rcsNumber}</span>}
+            {kbisReview.apeCode && <span>{t.apeCode}: {kbisReview.apeCode}</span>}
+            {kbisReview.registeredAddress && <span>{t.registeredAddress}: {kbisReview.registeredAddress}</span>}
+            {kbisReview.activityDescription && <span>{t.activityDescription}: {kbisReview.activityDescription}</span>}
+            <span>Confidence: {kbisReview.confidenceNotes.length ? kbisReview.confidenceNotes.join(", ") : "text detected"}</span>
+          </div>
+        )}
         <form className="form-grid two" onSubmit={updateCompany}>
           <label>
             {t.companyName}
-            <input name="name" defaultValue={company.name} required />
+            <input name="name" value={companyDraft.name} onChange={(event) => updateCompanyDraft("name", event.target.value)} required />
           </label>
           <label>
             {t.legalForm}
-            <input name="legal_form" defaultValue={company.legal_form ?? ""} placeholder="SASU, EI, micro-entreprise" />
+            <input name="legal_form" value={companyDraft.legal_form} onChange={(event) => updateCompanyDraft("legal_form", event.target.value)} placeholder="SASU, EI, micro-entreprise" />
+          </label>
+          <label className="span-form">
+            {t.registeredAddress}
+            <textarea name="registered_address" rows={2} value={companyDraft.registered_address} onChange={(event) => updateCompanyDraft("registered_address", event.target.value)} />
+          </label>
+          <label>
+            {t.rcsNumber}
+            <input name="rcs_number" value={companyDraft.rcs_number} onChange={(event) => updateCompanyDraft("rcs_number", event.target.value)} placeholder="RCS Paris 123456789" />
+          </label>
+          <label>
+            {t.apeCode}
+            <input name="ape_code" value={companyDraft.ape_code} onChange={(event) => updateCompanyDraft("ape_code", event.target.value)} placeholder="6201Z" />
+          </label>
+          <label className="span-form">
+            {t.activityDescription}
+            <textarea name="activity_description" rows={2} value={companyDraft.activity_description} onChange={(event) => updateCompanyDraft("activity_description", event.target.value)} />
           </label>
           <label>
             {t.fiscalRegime}
-            <select name="fiscal_regime" defaultValue={company.fiscal_regime}>
+            <select name="fiscal_regime" value={companyDraft.fiscal_regime} onChange={(event) => updateCompanyDraft("fiscal_regime", event.target.value)}>
               <option value="micro_bnc">Micro-BNC</option>
               <option value="micro_bic">Micro-BIC</option>
               <option value="reel_simplifie">Reel simplifie</option>
@@ -5696,26 +5984,26 @@ function SettingsView({
           </label>
           <label>
             {t.vatMode}
-            <select name="vat_liability_mode" defaultValue={company.vat_liability_mode}>
+            <select name="vat_liability_mode" value={companyDraft.vat_liability_mode} onChange={(event) => updateCompanyDraft("vat_liability_mode", event.target.value)}>
               <option value="exempt">Franchise en base</option>
               <option value="vat_registered">VAT registered</option>
             </select>
           </label>
           <label>
             {t.invoicePrefix}
-            <input name="invoice_prefix" defaultValue={company.invoice_prefix} required />
+            <input name="invoice_prefix" value={companyDraft.invoice_prefix} onChange={(event) => updateCompanyDraft("invoice_prefix", event.target.value)} required />
           </label>
           <label>
             {t.baseCurrency}
-            <input name="base_currency" defaultValue={company.base_currency ?? "EUR"} required />
+            <input name="base_currency" value={companyDraft.base_currency} onChange={(event) => updateCompanyDraft("base_currency", event.target.value)} required />
           </label>
           <label>
             SIRET
-            <input name="siret" defaultValue={company.siret ?? ""} />
+            <input name="siret" value={companyDraft.siret} onChange={(event) => updateCompanyDraft("siret", event.target.value)} />
           </label>
           <label>
             {t.vatNumber}
-            <input name="vat_number" defaultValue={company.vat_number ?? ""} />
+            <input name="vat_number" value={companyDraft.vat_number} onChange={(event) => updateCompanyDraft("vat_number", event.target.value)} />
           </label>
           <button className="primary" disabled={!currentAccess.canManageCompany}>{t.saveCompany}</button>
         </form>
