@@ -752,6 +752,87 @@ textarea {
   line-height: 1.55;
 }
 
+.contract-register-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.contract-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  background: #f7f9f2;
+  border: 1px solid rgba(34, 49, 40, 0.12);
+  border-radius: 12px;
+}
+
+.contract-card-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.contract-card-head > div {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.contract-card-head strong {
+  overflow-wrap: anywhere;
+  font-size: 1rem;
+}
+
+.contract-card-head span,
+.contract-card-meta span {
+  color: #5c675f;
+  font-size: 0.86rem;
+}
+
+.status-pill {
+  flex: 0 0 auto;
+  padding: 6px 9px;
+  color: #213228;
+  background: #dfe7c8;
+  border-radius: 999px;
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.status-pill.danger {
+  color: #7a2d20;
+  background: #f3ded8;
+}
+
+.contract-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.contract-card-meta span {
+  padding: 6px 8px;
+  background: #ffffff;
+  border: 1px solid rgba(34, 49, 40, 0.08);
+  border-radius: 999px;
+}
+
+.contract-card-issues {
+  margin: 0;
+  color: #7a2d20;
+}
+
+.contract-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.contract-card-actions button {
+  gap: 7px;
+}
+
 .contract-editor {
   min-height: 460px;
   font-family: "SFMono-Regular", "Consolas", monospace;
@@ -867,6 +948,26 @@ textarea {
 
 .quick-prompts strong {
   margin-right: 4px;
+}
+
+.contract-ai-modifier {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  color: #223128;
+  background: #eef1ed;
+  border: 1px solid rgba(34, 49, 40, 0.12);
+  border-radius: 12px;
+}
+
+.contract-ai-modifier > div {
+  display: grid;
+  gap: 4px;
+}
+
+.contract-ai-modifier span {
+  color: #5d6a60;
+  font-size: 0.9rem;
 }
 
 .contract-design-tools {

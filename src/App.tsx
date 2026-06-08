@@ -24,6 +24,7 @@ import {
   XCircle,
   PanelLeftClose,
   PanelLeftOpen,
+  WandSparkles,
 } from "lucide-react";
 import { supabase } from "./supabase";
 import {
@@ -587,7 +588,17 @@ const labels: Record<Locale, Record<string, string>> = {
     sendAnswer: "Send answer",
     generateFromChat: "Generate from chat",
     contractRegister: "Contract register",
-    contractRegisterHelp: "Generated contracts are stored with the company and can be exported to PDF.",
+    contractRegisterHelp: "Track every draft, QA state, approval state and export action from one place.",
+    contractOpenEditor: "Open editor",
+    contractAiModify: "Modify with AI",
+    contractAiModifyHelp: "Tell the AI exactly what to change. It will rewrite the draft and run the same quality checks.",
+    contractAiInstruction: "Modification request",
+    contractAiInstructionPlaceholder: "Example: make compensation a 50% revenue share, reducible for new costs or employees, but never below 20%. Keep the French column fully French.",
+    contractAiModifyButton: "Apply AI changes",
+    contractNeedsOllama: "Switch the contract AI provider to Ollama before using AI modifications.",
+    qaIssues: "QA issues",
+    approvalState: "Approval",
+    finalize: "Finalize",
     editDraft: "Edit draft",
     saveDraft: "Save draft",
     draftSaved: "Contract draft saved.",
@@ -891,7 +902,17 @@ const labels: Record<Locale, Record<string, string>> = {
     sendAnswer: "Envoyer",
     generateFromChat: "Générer depuis le chat",
     contractRegister: "Registre des contrats",
-    contractRegisterHelp: "Les contrats générés sont stockés et exportables en PDF.",
+    contractRegisterHelp: "Suivez chaque brouillon, l'état QA, l'approbation et les exports depuis un seul endroit.",
+    contractOpenEditor: "Ouvrir l'éditeur",
+    contractAiModify: "Modifier avec l'IA",
+    contractAiModifyHelp: "Dites précisément quoi changer. L'IA réécrit le brouillon et relance les mêmes contrôles qualité.",
+    contractAiInstruction: "Demande de modification",
+    contractAiInstructionPlaceholder: "Exemple : transformer la rémunération en 50 % des revenus, réductible si de nouveaux coûts ou employés arrivent, sans jamais descendre sous 20 %. Garder la colonne française entièrement en français.",
+    contractAiModifyButton: "Appliquer les changements IA",
+    contractNeedsOllama: "Passez le fournisseur IA contrat sur Ollama avant d'utiliser les modifications IA.",
+    qaIssues: "Points QA",
+    approvalState: "Approbation",
+    finalize: "Finaliser",
     editDraft: "Modifier le brouillon",
     saveDraft: "Enregistrer le brouillon",
     draftSaved: "Brouillon de contrat enregistré.",
@@ -2401,6 +2422,37 @@ async function generateContractWithOllama(contract: ContractDraftPayload, settin
     throw new Error(`Contract quality check failed after repair: ${remainingIssues.join(" ")}`);
   }
   return repairedDraft;
+}
+
+async function modifyContractWithOllama(contract: ContractDraftPayload, currentDraft: string, instruction: string, settings: ContractAiSettings) {
+  const prompt = `${buildContractPrompt(contract)}
+
+Existing draft to modify:
+${currentDraft}
+
+User modification request:
+${instruction}
+
+Rewrite the full contract, not just the changed clause.
+Hard requirements:
+- Apply the user modification exactly.
+- Preserve all existing facts that are not contradicted by the modification request.
+- Preserve percentages as percentages. Never convert a percentage into euros.
+- Keep the whole contract in ${contractLanguageName(contract.language)} only.
+- Return only the full revised contract text.`;
+  const revised = await fetchOllamaText(settings.endpoint, settings.model, prompt, 0.12);
+  const normalized = normalizeContractTextForLanguage(revised, contract.language);
+  const issues = contractQualityIssues(contract, normalized);
+  if (issues.length) {
+    const repaired = await fetchOllamaText(settings.endpoint, settings.model, buildContractRepairPrompt(contract, normalized, issues), 0.05);
+    const repairedNormalized = normalizeContractTextForLanguage(repaired, contract.language);
+    const remainingIssues = contractQualityIssues(contract, repairedNormalized);
+    if (remainingIssues.length) {
+      throw new Error(`AI modification quality check failed: ${remainingIssues.join(" ")}`);
+    }
+    return repairedNormalized;
+  }
+  return normalized;
 }
 
 function translationQualityIssues(targetLanguage: string, sourceText: string, translatedText: string) {
@@ -4620,6 +4672,8 @@ function ContractsView({
   const [aiSettings, setAiSettings] = useState<ContractAiSettings>(readContractAiSettings);
   const [generating, setGenerating] = useState(false);
   const [generatingTranslation, setGeneratingTranslation] = useState(false);
+  const [modifyingContract, setModifyingContract] = useState(false);
+  const [contractModificationRequest, setContractModificationRequest] = useState("");
   const [chatAnswerDraft, setChatAnswerDraft] = useState("");
   const [chatDraft, setChatDraft] = useState<ContractChatState>({
     step: 0,
@@ -4753,6 +4807,7 @@ function ContractsView({
     setContractAccentColor(branding.accentColor || "#223128");
     setContractFontFamily(branding.fontFamily || "helvetica");
     setContractLogoDataUrl(branding.logoDataUrl || "");
+    setContractModificationRequest("");
   }
 
   function updateTranslationLanguage(language: string) {
@@ -4803,6 +4858,65 @@ function ContractsView({
       source_event_id: `contract-${previewContract.id}-draft-edit-${Date.now()}`,
     });
     onChanged();
+  }
+
+  async function applyAiContractModification() {
+    if (!previewContract) return;
+    setMessage("");
+    if (!canWrite(currentAccess)) {
+      setMessage(t.writeRestricted);
+      return;
+    }
+    if (aiSettings.provider !== "ollama") {
+      setMessage(t.contractNeedsOllama);
+      return;
+    }
+    const instruction = contractModificationRequest.trim();
+    if (!instruction) return;
+
+    setModifyingContract(true);
+    try {
+      const payload = contractToPayload(previewContract);
+      const revisedDraft = await modifyContractWithOllama(payload, previewContent || previewContract.generated_content, instruction, aiSettings);
+      const reviewIssues = contractQualityIssues(payload, revisedDraft);
+      const sourcePayload = {
+        ...(previewContract.source_payload ?? {}),
+        ai_modifications: [
+          ...((previewContract.source_payload?.ai_modifications as Array<Record<string, unknown>> | undefined) ?? []),
+          {
+            instruction,
+            provider: aiSettings.provider,
+            model: aiSettings.model,
+            modified_at: new Date().toISOString(),
+          },
+        ],
+      };
+      const { error } = await supabase
+        .from("contracts")
+        .update({
+          generated_content: revisedDraft,
+          source_payload: sourcePayload,
+          compliance_status: contractReviewStatus(reviewIssues),
+          compliance_notes: contractReviewNotes(reviewIssues, "Modified with AI. Review before approval or signature."),
+        })
+        .eq("id", previewContract.id);
+      if (error) throw error;
+      setPreviewContent(revisedDraft);
+      setPreviewContract({
+        ...previewContract,
+        generated_content: revisedDraft,
+        source_payload: sourcePayload,
+        compliance_status: contractReviewStatus(reviewIssues),
+        compliance_notes: contractReviewNotes(reviewIssues, "Modified with AI. Review before approval or signature."),
+      });
+      setContractModificationRequest("");
+      setMessage(t.draftSaved);
+      onChanged();
+    } catch (error) {
+      setMessage(getMessage(error));
+    } finally {
+      setModifyingContract(false);
+    }
   }
 
   async function generateOtherLanguage() {
@@ -5365,45 +5479,64 @@ function ContractsView({
             <p>{t.contractRegisterHelp}</p>
           </div>
         </div>
-        <DataTable
-          emptyLabel={t.noRows}
-          columns={[t.created, t.title, t.language, t.status, t.approval, t.fee, t.actions]}
-          rows={contracts.map((contract) => [
-            new Date(contract.created_at).toLocaleDateString("fr-FR"),
-            contract.title,
-            contractLanguageName(contract.language),
-            contract.status,
-            approvals.find((approval) => approval.kind === "contract" && approval.target_id === contract.id)?.status ?? "not requested",
-            `${eur(contract.fee_amount)} ${contract.fee_currency}`,
-            "",
-          ])}
-          renderCell={(rowIndex, cellIndex, value) => {
-            const contract = contracts[rowIndex];
-            if (cellIndex !== 6) return value;
+        <div className="contract-register-grid">
+          {contracts.length === 0 && <p className="empty-state">{t.noRows}</p>}
+          {contracts.map((contract) => {
+            const approval = approvals.find((item) => item.kind === "contract" && item.target_id === contract.id);
+            const issues = contractQualityIssues(contractToPayload(contract), contract.generated_content);
+            const statusLabel = issues.length ? "needs_revision" : contract.compliance_status;
             return (
-              <div className="row-actions">
-                <button className="small-action" title="Preview" onClick={() => openContractPreview(contract)}>
-                  <FileText size={15} />
-                </button>
-                <button className="small-action" title={t.downloadPdf} onClick={() => void downloadContractPdf(contract, company)}>
-                  <FileDown size={15} />
-                </button>
-                {canWrite(currentAccess) && (
-                  <>
-                    {canRequestApproval(currentAccess) && (
-                      <button className="small-action" title="Request approval" onClick={() => void requestContractApproval(contract)}>
-                        <ShieldCheck size={15} />
-                      </button>
-                    )}
-                    <button className="small-action" title="Finalize" onClick={() => void updateContract(contract.id, "finalized")}>
-                      <CheckCircle2 size={15} />
-                    </button>
-                  </>
+              <article className="contract-card" key={contract.id}>
+                <div className="contract-card-head">
+                  <div>
+                    <strong>{contract.title}</strong>
+                    <span>{contractTypeLabels[contract.contract_type] ?? contract.contract_type}</span>
+                  </div>
+                  <span className={issues.length ? "status-pill danger" : "status-pill"}>
+                    {statusLabel}
+                  </span>
+                </div>
+                <div className="contract-card-meta">
+                  <span>{t.created}: {new Date(contract.created_at).toLocaleDateString("fr-FR")}</span>
+                  <span>{t.language}: {contractLanguageName(contract.language)}</span>
+                  <span>{t.status}: {contract.status}</span>
+                  <span>{t.approvalState}: {approval?.status ?? "not requested"}</span>
+                  <span>{t.fee}: {hasRevenueShareTerms([contract.payment_terms, contract.special_terms, contract.deliverables].filter(Boolean).join("\n")) ? "variable" : `${eur(contract.fee_amount)} ${contract.fee_currency}`}</span>
+                  <span>{t.qaIssues}: {issues.length}</span>
+                </div>
+                {issues.length > 0 && (
+                  <ul className="compact-list contract-card-issues">
+                    {issues.slice(0, 3).map((issue) => (
+                      <li key={issue}>{issue}</li>
+                    ))}
+                  </ul>
                 )}
-              </div>
+                <div className="contract-card-actions">
+                  <button className="ghost" onClick={() => openContractPreview(contract)}>
+                    <FileText size={15} />
+                    {t.contractOpenEditor}
+                  </button>
+                  <button className="ghost" onClick={() => void downloadContractPdf(contract, company)}>
+                    <FileDown size={15} />
+                    {t.downloadPdf}
+                  </button>
+                  {canWrite(currentAccess) && canRequestApproval(currentAccess) && (
+                    <button className="ghost" onClick={() => void requestContractApproval(contract)}>
+                      <ShieldCheck size={15} />
+                      {t.requestApproval}
+                    </button>
+                  )}
+                  {canWrite(currentAccess) && (
+                    <button className="primary" onClick={() => void updateContract(contract.id, "finalized")}>
+                      <CheckCircle2 size={15} />
+                      {t.finalize}
+                    </button>
+                  )}
+                </div>
+              </article>
             );
-          }}
-        />
+          })}
+        </div>
         {previewContract && (
           <div className="contract-preview">
             <div className="section-heading">
@@ -5489,6 +5622,29 @@ function ContractsView({
                 {t.bilingualPdf}
               </button>
             </div>
+            <div className="contract-ai-modifier">
+              <div>
+                <strong>{t.contractAiModify}</strong>
+                <span>{t.contractAiModifyHelp}</span>
+              </div>
+              <label>
+                {t.contractAiInstruction}
+                <textarea
+                  rows={3}
+                  value={contractModificationRequest}
+                  onChange={(event) => setContractModificationRequest(event.target.value)}
+                  placeholder={t.contractAiInstructionPlaceholder}
+                />
+              </label>
+              <button
+                className="primary"
+                disabled={modifyingContract || !contractModificationRequest.trim() || !canWrite(currentAccess)}
+                onClick={() => void applyAiContractModification()}
+              >
+                <WandSparkles size={17} />
+                {modifyingContract ? t.generating : t.contractAiModifyButton}
+              </button>
+            </div>
             <div className="contract-editor-split">
               <label>
                 {t.editDraft}
@@ -5526,6 +5682,7 @@ function ContractsView({
                 setPreviewContent("");
                 setTranslationContent("");
                 setContractLogoDataUrl("");
+                setContractModificationRequest("");
               }}>
                 {t.closePreview}
               </button>
