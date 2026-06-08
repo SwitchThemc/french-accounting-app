@@ -573,6 +573,16 @@ const labels: Record<Locale, Record<string, string>> = {
     generating: "Generating...",
     aiContractInterview: "AI contract interview",
     aiContractInterviewHelp: "Describe the contract. The assistant asks follow-up questions, then generates a draft.",
+    contractBrief: "Contract brief",
+    contractBriefHelp: "The AI uses this structured brief before it writes. Missing items become targeted follow-up questions.",
+    briefStrength: "Brief strength",
+    extractedFacts: "Extracted facts",
+    missingFacts: "Missing facts",
+    quickPrompts: "Quick starts",
+    revenueShareExample: "Revenue-share partner",
+    bookingExample: "Artist booking",
+    ndaExample: "NDA",
+    contractAiWarning: "This is drafting assistance, not legal advice. Review sensitive contracts before signature.",
     yourAnswer: "Your answer",
     sendAnswer: "Send answer",
     generateFromChat: "Generate from chat",
@@ -867,6 +877,16 @@ const labels: Record<Locale, Record<string, string>> = {
     generating: "Génération...",
     aiContractInterview: "Entretien IA contrat",
     aiContractInterviewHelp: "Décrivez le contrat. L'assistant pose des questions puis génère un brouillon.",
+    contractBrief: "Brief contrat",
+    contractBriefHelp: "L'IA utilise ce brief structuré avant de rédiger. Les éléments manquants deviennent des questions ciblées.",
+    briefStrength: "Qualité du brief",
+    extractedFacts: "Éléments détectés",
+    missingFacts: "Éléments manquants",
+    quickPrompts: "Démarrages rapides",
+    revenueShareExample: "Partenaire au revenu",
+    bookingExample: "Engagement artiste",
+    ndaExample: "NDA",
+    contractAiWarning: "C'est une aide à la rédaction, pas un avis juridique. Relisez les contrats sensibles avant signature.",
     yourAnswer: "Votre réponse",
     sendAnswer: "Envoyer",
     generateFromChat: "Générer depuis le chat",
@@ -1968,7 +1988,9 @@ function localTemplateSupportsContractLanguage(language: string) {
 
 function buildContractPrompt(contract: ContractDraftPayload) {
   const languageName = contractLanguageName(contract.language);
-  const variableCompensation = hasRevenueShareTerms(contract.payment_terms);
+  const factLedger = buildContractFactLedger(contract);
+  const allFactText = [contract.payment_terms, contract.special_terms, contract.deliverables].filter(Boolean).join("\n");
+  const variableCompensation = hasRevenueShareTerms(allFactText);
   const languageGuard =
     contract.language === "fr"
       ? "- Strict language rule: write every heading, clause, placeholder, signature block, and legal note in French only. Do not use English headings such as Purpose, Term, Compensation, Confidentiality, Governing Law, or Signatures.\n- Use correct French accents and legal drafting style. Do not output mojibake or ASCII-only French."
@@ -1988,23 +2010,20 @@ Important constraints:
 - Jurisdiction: ${contract.country || "France"}
 - Draft language: ${languageName}. Draft the full contract in ${languageName}.
 - Output must be internally consistent with the facts. Never reinterpret percentages as currency amounts.
+- Treat the fact ledger below as source-of-truth. If a fact is uncertain, keep a bracketed placeholder instead of inventing a contradictory fact.
+- Use Party A's verified company identity exactly as written. Do not shorten, translate, or replace the legal name/address.
 ${languageGuard}
 - This is a draft for business use, not legal advice.
-- Include: parties, definitions, scope, deliverables, dates, payment, late payment, expenses, IP, portfolio rights, confidentiality, GDPR/data protection where relevant, cancellation, force majeure, liability, independent contractor status, dispute resolution, notices, entire agreement, signatures.
+- Include: parties, definitions, scope, deliverables, acceptance, dates, payment, late payment, expenses, tax/VAT note where relevant, IP, portfolio rights, confidentiality, GDPR/data protection where relevant, cancellation, force majeure, liability, independent contractor status, dispute resolution, notices, amendments, entire agreement, signatures.
 - For this contract type, pay special attention to: ${contractTypeDraftingFocus(contract.contract_type)}
 - Be specific and use the facts provided. If a field is missing, write a bracketed placeholder.
 ${compensationInstruction}
 
-Contract facts:
-- Title: ${contract.title}
-- Type: ${contractTypeLabels[contract.contract_type] ?? contract.contract_type}
-- Party A: ${contract.party_a_name}, ${contract.party_a_address || "[address missing]"}, ${contract.party_a_email || "[email missing]"}
-- Party B: ${contract.party_b_name}, ${contract.party_b_address || "[address missing]"}, ${contract.party_b_email || "[email missing]"}
-- Start date: ${contract.start_date || "[start date missing]"}
-- End date: ${contract.end_date || "[end date / completion condition missing]"}
-- Payment terms: ${contract.payment_terms || "[payment terms missing]"}
-- Deliverables / scope: ${contract.deliverables || "[scope missing]"}
-- Special terms: ${contract.special_terms || "[none]"}
+Contract title:
+${contract.title}
+
+Fact ledger:
+${factLedger}
 
 Return only the contract text.`;
 }
@@ -2158,6 +2177,15 @@ function contractCompletenessIssues(contract: ContractDraftPayload, text: string
       issues.push(`Missing party name in draft: ${value}.`);
     }
   });
+  if (!contract.party_b_name.trim() || /^counterparty$/i.test(contract.party_b_name.trim())) {
+    issues.push("Counterparty name is missing or still generic.");
+  }
+  if (contract.deliverables.trim().length < 20) {
+    issues.push("Scope/deliverables are too thin for a usable contract.");
+  }
+  if (!contract.payment_terms.trim() && Number(contract.fee_amount || 0) <= 0) {
+    issues.push("Payment terms or compensation are missing.");
+  }
 
   if (!localTemplateSupportsContractLanguage(contract.language)) {
     return issues;
@@ -2281,6 +2309,60 @@ function buildPayloadFromChat(company: Company, answers: Partial<ContractDraftPa
     deliverables: answers.deliverables || "",
     special_terms: answers.special_terms || "",
   };
+}
+
+function contractBriefItems(payload: ContractDraftPayload) {
+  return [
+    { key: "type", label: "Contract type", done: Boolean(payload.contract_type), value: contractTypeLabels[payload.contract_type] ?? payload.contract_type },
+    { key: "language", label: "Language", done: Boolean(payload.language), value: contractLanguageName(payload.language) },
+    { key: "parties", label: "Parties", done: Boolean(payload.party_a_name && payload.party_b_name && payload.party_b_name !== "Counterparty"), value: `${payload.party_a_name || "-"} / ${payload.party_b_name || "-"}` },
+    { key: "scope", label: "Scope", done: payload.deliverables.trim().length >= 20, value: payload.deliverables },
+    { key: "dates", label: "Dates / location", done: Boolean(payload.start_date || payload.end_date || /date|deadline|location|lieu/i.test(payload.special_terms)), value: [payload.start_date, payload.end_date, payload.special_terms.match(/Dates\/location\/deadlines:[^\n]+/i)?.[0]].filter(Boolean).join(" / ") },
+    { key: "money", label: "Money", done: Boolean(payload.payment_terms.trim() || Number(payload.fee_amount) > 0), value: hasRevenueShareTerms(payload.payment_terms) ? payload.payment_terms : `${payload.fee_amount || 0} ${payload.fee_currency}` },
+    { key: "special", label: "Risk terms", done: payload.special_terms.trim().length >= 12, value: payload.special_terms },
+  ];
+}
+
+function contractBriefStatus(company: Company, answers: Partial<ContractDraftPayload>) {
+  const payload = buildPayloadFromChat(company, answers);
+  const items = contractBriefItems(payload);
+  const completed = items.filter((item) => item.done);
+  const missing = items.filter((item) => !item.done);
+  return {
+    payload,
+    items,
+    completed,
+    missing,
+    score: Math.round((completed.length / items.length) * 100),
+  };
+}
+
+function buildContractFactLedger(contract: ContractDraftPayload) {
+  const factText = [contract.payment_terms, contract.special_terms, contract.deliverables].filter(Boolean).join("\n");
+  const percentages = extractPercentageValues(factText);
+  return [
+    `Parties: ${contract.party_a_name || "[Party A missing]"} / ${contract.party_b_name || "[Party B missing]"}`,
+    `Language: ${contractLanguageName(contract.language)}`,
+    `Jurisdiction: ${contract.country || "France"}`,
+    `Type: ${contractTypeLabels[contract.contract_type] ?? contract.contract_type}`,
+    `Scope: ${contract.deliverables || "[scope missing]"}`,
+    `Dates: starts ${contract.start_date || "[missing]"}; ends ${contract.end_date || "[completion condition missing]"}`,
+    hasRevenueShareTerms(factText)
+      ? `Compensation: variable/revenue-share terms. Percentages detected: ${percentages.length ? percentages.map((value) => `${value}%`).join(", ") : "[none explicitly detected]"}. Raw terms: ${contract.payment_terms || "[missing]"}`
+      : `Compensation: fixed fee ${contract.fee_amount.toFixed(2)} ${contract.fee_currency}. Payment terms: ${contract.payment_terms || "[missing]"}`,
+    `Special/risk terms: ${contract.special_terms || "[none]"}`,
+  ].join("\n");
+}
+
+function nextContractQuestion(company: Company, answers: Partial<ContractDraftPayload>) {
+  const status = contractBriefStatus(company, answers);
+  const missing = status.missing[0]?.key;
+  if (missing === "parties") return "Who is the counterparty, and should your verified company profile be Party A?";
+  if (missing === "scope") return "What exactly must each party deliver, and what counts as acceptance or completion?";
+  if (missing === "dates") return "What are the start date, end date or completion trigger, location, and any hard deadlines?";
+  if (missing === "money") return "How is payment calculated? Include fixed fee, deposit, revenue share, percentages, floors, cost adjustments, reporting cadence, and payment timing.";
+  if (missing === "special") return "Any risk terms to include: cancellation, exclusivity, IP ownership, approvals, confidentiality, travel, insurance, employees, or expense rules?";
+  return "I have the core facts. Add any final constraints or generate the contract.";
 }
 
 async function generateContractWithOllama(contract: ContractDraftPayload, settings: ContractAiSettings) {
@@ -2451,10 +2533,12 @@ async function generateContractTranslationWithOllama(
 async function generateContractFollowUpWithOllama(
   messages: ContractChatMessage[],
   answers: Partial<ContractDraftPayload>,
+  company: Company,
   settings: ContractAiSettings,
 ) {
   const endpoint = settings.endpoint.replace(/\/+$/, "");
   const transcript = messages.map((message) => `${message.role}: ${message.content}`).join("\n");
+  const status = contractBriefStatus(company, answers);
   const response = await fetch(`${endpoint}/api/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2463,13 +2547,17 @@ async function generateContractFollowUpWithOllama(
       stream: false,
       prompt: `You are interviewing a small business owner to draft a contract. Ask exactly one concise follow-up question that gathers the most important missing detail. Do not draft the contract yet.
 
+Current brief score: ${status.score}%
+Missing brief items: ${status.missing.map((item) => item.label).join(", ") || "none"}
+Recommended next question: ${nextContractQuestion(company, answers)}
+
 Known structured answers:
 ${JSON.stringify(answers, null, 2)}
 
 Conversation:
 ${transcript}
 
-Return only the next question.`,
+Return only the next question. Preserve percentages and floors exactly if you mention compensation.`,
       options: {
         temperature: 0.15,
         num_ctx: 4096,
@@ -4532,6 +4620,7 @@ function ContractsView({
   const [aiSettings, setAiSettings] = useState<ContractAiSettings>(readContractAiSettings);
   const [generating, setGenerating] = useState(false);
   const [generatingTranslation, setGeneratingTranslation] = useState(false);
+  const [chatAnswerDraft, setChatAnswerDraft] = useState("");
   const [chatDraft, setChatDraft] = useState<ContractChatState>({
     step: 0,
     answers: {},
@@ -4915,14 +5004,22 @@ function ContractsView({
     }
   }
 
+  function contractQuickPrompt(kind: "revenue_share" | "artist_booking" | "nda") {
+    const prompts = {
+      revenue_share: "I need a partnership agreement in French. My verified company is Party A. The counterparty will receive 50% of all revenue at first. If more costs or employees are added, the percentage can be reduced, but never below 20%. Include monthly reporting, payment timing, audit rights, confidentiality, IP ownership, and termination.",
+      artist_booking: "I need an artist booking contract in English for a live performance. Include artist obligations, event date and location, fee, deposit, technical rider, cancellation, travel, recording rights, promotion approval, insurance, and settlement after the show.",
+      nda: "I need a mutual NDA in French. Include confidential information, permitted use, exclusions, duration, return or destruction, compelled disclosure, data protection, no license, remedies, and signatures.",
+    };
+    setChatAnswerDraft(prompts[kind]);
+  }
+
   async function sendChatAnswer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canWrite(currentAccess)) {
       setMessage(t.writeRestricted);
       return;
     }
-    const form = new FormData(event.currentTarget);
-    const answer = String(form.get("answer") || "").trim();
+    const answer = chatAnswerDraft.trim();
     if (!answer) return;
     let nextAnswers = inferContractFactsFromText(answer, company, chatDraft.answers);
     const requestedLanguage = inferContractLanguage(answer);
@@ -4952,12 +5049,12 @@ function ContractsView({
     const nextMessages: ContractChatMessage[] = [...chatDraft.messages, { role: "user", content: answer }];
     let assistantMessage =
       nextStep < contractChatQuestions.length
-        ? contractChatQuestions[nextStep]
+        ? nextContractQuestion(company, nextAnswers)
         : "I have enough context. Review the summary and generate the contract when ready.";
     if (aiSettings.provider === "ollama" && nextStep < 8) {
       try {
         assistantMessage =
-          (await generateContractFollowUpWithOllama(nextMessages, nextAnswers, aiSettings)) || assistantMessage;
+          (await generateContractFollowUpWithOllama(nextMessages, nextAnswers, company, aiSettings)) || assistantMessage;
       } catch (error) {
         setMessage(getMessage(error));
       }
@@ -4967,7 +5064,7 @@ function ContractsView({
       answers: nextAnswers,
       messages: [...nextMessages, { role: "assistant", content: assistantMessage }],
     });
-    event.currentTarget.reset();
+    setChatAnswerDraft("");
   }
 
   async function generateFromChat() {
@@ -5042,6 +5139,8 @@ function ContractsView({
   const previewReviewIssues = previewContract
     ? contractQualityIssues(contractToPayload(previewContract), previewContent || previewContract.generated_content)
     : [];
+  const chatBriefStatus = contractBriefStatus(company, chatDraft.answers);
+  const chatFactRows = chatBriefStatus.items.filter((item) => item.value && String(item.value).trim() && item.value !== "0 EUR");
 
   return (
     <div className="split-view">
@@ -5203,6 +5302,34 @@ function ContractsView({
             <p>{t.aiContractInterviewHelp}</p>
           </div>
         </div>
+        <div className="contract-brief-panel">
+          <div>
+            <strong>{t.contractBrief}</strong>
+            <span>{t.contractBriefHelp}</span>
+          </div>
+          <div className="brief-meter" aria-label={`${t.briefStrength}: ${chatBriefStatus.score}%`}>
+            <span style={{ width: `${chatBriefStatus.score}%` }} />
+          </div>
+          <div className="brief-meta">
+            <span>{t.briefStrength}: {chatBriefStatus.score}%</span>
+            <span>{t.missingFacts}: {chatBriefStatus.missing.map((item) => item.label).join(", ") || "none"}</span>
+          </div>
+          {chatFactRows.length > 0 && (
+            <div className="brief-facts">
+              <strong>{t.extractedFacts}</strong>
+              {chatFactRows.map((item) => (
+                <span key={item.key}>{item.label}: {String(item.value).slice(0, 180)}</span>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="quick-prompts">
+          <strong>{t.quickPrompts}</strong>
+          <button type="button" className="ghost" onClick={() => contractQuickPrompt("revenue_share")}>{t.revenueShareExample}</button>
+          <button type="button" className="ghost" onClick={() => contractQuickPrompt("artist_booking")}>{t.bookingExample}</button>
+          <button type="button" className="ghost" onClick={() => contractQuickPrompt("nda")}>{t.ndaExample}</button>
+        </div>
+        <p className="notice">{t.contractAiWarning}</p>
         <div className="chat-box">
           {chatDraft.messages.map((item, index) => (
             <div key={`${item.role}-${index}`} className={`chat-message ${item.role}`}>
@@ -5213,7 +5340,13 @@ function ContractsView({
         <form className="form-grid" onSubmit={sendChatAnswer}>
           <label>
             {t.yourAnswer}
-            <textarea name="answer" rows={3} placeholder="Tell the AI what you need..." />
+            <textarea
+              name="answer"
+              rows={4}
+              value={chatAnswerDraft}
+              onChange={(event) => setChatAnswerDraft(event.target.value)}
+              placeholder="Tell the AI what you need..."
+            />
           </label>
           <div className="inline-actions">
             <button className="primary" disabled={chatDraft.step >= 8 || !canWrite(currentAccess)}>

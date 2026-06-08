@@ -798,6 +798,77 @@ textarea {
   font-weight: 800;
 }
 
+.contract-brief-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 14px;
+  color: #223128;
+  background: linear-gradient(135deg, #f5f8e9, #e8efd2);
+  border: 1px solid rgba(34, 49, 40, 0.12);
+  border-radius: 12px;
+}
+
+.contract-brief-panel > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.contract-brief-panel span,
+.brief-facts span {
+  color: #536057;
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+.brief-meter {
+  height: 10px;
+  overflow: hidden;
+  background: rgba(34, 49, 40, 0.12);
+  border-radius: 999px;
+}
+
+.brief-meter span {
+  display: block;
+  height: 100%;
+  background: #223128;
+  border-radius: inherit;
+}
+
+.brief-meta,
+.brief-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.brief-meta span,
+.brief-facts span {
+  display: inline-flex;
+  max-width: 100%;
+  padding: 7px 9px;
+  overflow-wrap: anywhere;
+  background: #ffffff;
+  border: 1px solid rgba(34, 49, 40, 0.1);
+  border-radius: 999px;
+}
+
+.brief-facts strong {
+  flex-basis: 100%;
+}
+
+.quick-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.quick-prompts strong {
+  margin-right: 4px;
+}
+
 .contract-design-tools {
   display: grid;
   grid-template-columns: minmax(180px, 1.4fr) minmax(80px, 0.5fr) minmax(120px, 0.7fr) minmax(180px, 1fr) minmax(130px, auto);
